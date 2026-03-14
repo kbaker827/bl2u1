@@ -20,7 +20,42 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 1. Upload your Bambu Lab .3mf file
 2. Review and adjust filament colors/types if needed
 3. Click "Convert and Download"
-4. Open the converted file in **Snapmaker Orca** for final slicing
+4. Open the converted file in **[Snapmaker Orca](https://github.com/Snapmaker/OrcaSlicer/releases/latest)** for final slicing
+
+## Integration with Snapmaker Orca
+
+bl2u1 is designed to work hand-in-hand with **[Snapmaker Orca](https://github.com/Snapmaker/OrcaSlicer)**, the official slicer for Snapmaker printers (a fork of OrcaSlicer). The two tools form a complete Bambu → U1 workflow:
+
+| Step | Tool |
+|------|------|
+| Design & multi-color paint | Bambu Studio / BambuStudio |
+| Export `.3mf` project | Bambu Studio |
+| **Convert to U1 format** | **bl2u1 (this tool)** |
+| Slice & send to printer | **Snapmaker Orca** |
+
+### Getting Snapmaker Orca
+
+Download the latest release from the [Snapmaker/OrcaSlicer releases page](https://github.com/Snapmaker/OrcaSlicer/releases/latest).
+It ships with built-in Snapmaker machine profiles and the full library of compatible filament presets.
+
+### Keeping Filament Profiles in Sync
+
+The `sync_profiles.py` script fetches the current Snapmaker filament profile list directly from the OrcaSlicer repository,
+so you can keep `filament_types.3mf` aligned with whichever Orca version you have installed:
+
+```bash
+# Install dependencies (only needed once)
+pip install requests
+
+# Print current OrcaSlicer Snapmaker filament profiles to stdout
+python sync_profiles.py
+
+# Save to a JSON file for inspection / further processing
+python sync_profiles.py --output profiles.json
+
+# With a GitHub token to avoid rate-limiting
+python sync_profiles.py --token <your_token> --output profiles.json
+```
 
 ## Self-Hosting
 
@@ -50,6 +85,7 @@ The application will be available at `http://localhost:8080`
 ```
 bambu-to-u1-web/
 ├── app.py                    # Flask backend
+├── sync_profiles.py          # Fetch filament profiles from OrcaSlicer repo
 ├── templates/
 │   └── index.html            # Frontend interface
 ├── uploads/                  # Temporary file storage (auto-cleaned)

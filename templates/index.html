@@ -101,6 +101,37 @@
             <i class="fa-solid fa-circle-notch fa-spin text-4xl text-cyan-400"></i>
             <p class="mt-2 text-slate-400">Processing geometry&hellip;</p>
         </div>
+
+        <!-- Step 3: Next steps after conversion -->
+        <div id="step3" class="hidden mt-6 bg-slate-700/50 border border-slate-600 rounded-xl p-5">
+            <h3 class="text-lg font-semibold text-green-400 mb-3 flex items-center gap-2">
+                <i class="fa-solid fa-circle-check"></i> Conversion complete &mdash; next step
+            </h3>
+            <p class="text-slate-300 text-sm mb-4">
+                Open the downloaded <code class="bg-slate-900 px-1 rounded text-cyan-300">Snapmaker_U1_Ready.3mf</code>
+                file in <strong>Snapmaker Orca</strong> to slice and send it to your U1 printer.
+            </p>
+            <div class="flex flex-col sm:flex-row gap-3">
+                <a id="orca-download-link"
+                   href="https://github.com/Snapmaker/OrcaSlicer/releases/latest"
+                   target="_blank" rel="noopener noreferrer"
+                   class="flex-1 flex items-center justify-center gap-2 bg-green-700 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded transition-colors text-sm">
+                    <i class="fa-brands fa-github"></i>
+                    Download Snapmaker Orca
+                </a>
+                <a href="https://github.com/Snapmaker/OrcaSlicer"
+                   target="_blank" rel="noopener noreferrer"
+                   class="flex items-center justify-center gap-2 bg-slate-600 hover:bg-slate-500 text-slate-200 font-semibold py-2 px-4 rounded transition-colors text-sm">
+                    <i class="fa-solid fa-book"></i>
+                    Slicer docs
+                </a>
+            </div>
+            <p class="text-slate-500 text-xs mt-3">
+                <i class="fa-solid fa-circle-info mr-1"></i>
+                Snapmaker Orca is the official slicer for Snapmaker U1 &mdash; it includes the U1 machine profile
+                and all compatible filament presets.
+            </p>
+        </div>
     </div>
 
     <p class="mt-4 text-xs text-slate-500 text-center">
@@ -333,6 +364,7 @@
         // ----------------------------------------------------------------
         document.getElementById('btn-new').addEventListener('click', () => {
             document.getElementById('step2').classList.add('hidden');
+            document.getElementById('step3').classList.add('hidden');
             document.getElementById('step1').classList.remove('hidden', 'opacity-50', 'pointer-events-none');
             document.getElementById('filament-list').innerHTML = '';
             document.getElementById('file-upload').value = '';
@@ -402,6 +434,7 @@
                 // Trigger download, then restore button so user can convert again
                 window.location.href = data.download_url;
                 setConverting(false);
+                document.getElementById('step3').classList.remove('hidden');
             } catch (err) {
                 showError(err.message || 'Connection error. Please try again.');
                 setConverting(false);
