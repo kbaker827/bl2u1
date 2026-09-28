@@ -1,0 +1,6 @@
+uploads/
+inventory/
+__pycache__/
+*.pyc
+
+.claude/

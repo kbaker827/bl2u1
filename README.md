@@ -2,7 +2,15 @@
 
 A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, preserving multi-color painting and filament assignments.
 
-**Live version:** [https://bl2u1.nbn.cat](https://bl2u1.nbn.cat)
+> This is a fork of [josuanbn/bl2u1](https://github.com/josuanbn/bl2u1) that includes the
+> changes proposed in the upstream pull requests (security fixes, original filenames,
+> no 4-filament cap, batch conversion, a model library and Docker support).
+
+**Original live version:** [https://bl2u1.nbn.cat](https://bl2u1.nbn.cat)
+
+**Run this fork as your own website (one click):**
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/kbaker827/bl2u1)
 
 ## Features
 
@@ -11,7 +19,11 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 - Applies the 0.20mm Standard print profile for U1
 - Remaps filament types to U1 compatible profiles
 - Automatically enables Tree Supports (auto) if the original model has supports enabled
-- Supports up to 4 filaments/colors
+- Supports files with more than 4 filaments (all colors are kept)
+- Batch conversion of multiple files, with a single ZIP download
+- Library tab to keep converted models, with title, description, tags and search
+- Real-time upload progress bar
+- Downloaded file keeps the original name (e.g. `my_model-U1.3mf`)
 - Simple drag & drop interface
 - No installation required (web-based)
 
@@ -21,6 +33,26 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 2. Review and adjust filament colors/types if needed
 3. Click "Convert and Download"
 4. Open the converted file in **Snapmaker Orca** for final slicing
+
+## Hosting This Fork on the Web
+
+The app is a Python (Flask) server, so it needs a host that can run Python or
+Docker. Static hosts such as GitHub Pages will not work. The repo includes a
+`render.yaml` for [Render](https://render.com), which has a free tier:
+
+1. Click the **Deploy to Render** button above and sign in with GitHub.
+2. Accept the defaults and click **Apply**. Render builds the `Dockerfile`.
+3. After a few minutes the site is live at `https://bl2u1-XXXX.onrender.com`.
+   Every push to `main` redeploys automatically.
+4. Optional: add your own domain under *Settings → Custom Domains* in Render.
+
+Free-tier notes: the site sleeps after 15 minutes without visitors (the next
+visit takes about 30 seconds to wake it), and the disk is reset on each deploy
+or restart, so the Library tab is not permanent. Attach a Render persistent
+disk at `/app/inventory` (paid plan) if the library needs to persist.
+
+Any other Docker host (Fly.io, Railway, a VPS) also works. The container
+listens on `$PORT` (default `8080`).
 
 ## Self-Hosting
 
@@ -33,11 +65,11 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 
 ```bash
 # Clone the repository
-git clone https://github.com/josua/bl2u1.git
+git clone https://github.com/kbaker827/bl2u1.git
 cd bl2u1
 
 # Install dependencies
-pip install flask
+pip install -r requirements.txt
 
 # Run the application
 python app.py
@@ -45,14 +77,26 @@ python app.py
 
 The application will be available at `http://localhost:8080`
 
+### Docker
+
+```bash
+docker compose up -d
+```
+
+Uploads and the library are stored in Docker volumes.
+
 ### Project Structure
 
 ```
-bambu-to-u1-web/
+bl2u1/
 ├── app.py                    # Flask backend
+├── db.py                     # SQLite storage for the Library tab
+├── Dockerfile / docker-compose.yml
+├── render.yaml               # One-click Render deployment
 ├── templates/
 │   └── index.html            # Frontend interface
 ├── uploads/                  # Temporary file storage (auto-cleaned)
+├── inventory/                # Library files and database
 ├── u1_template.3mf           # U1 template without supports
 ├── u1_template_supports.3mf  # U1 template with tree supports
 └── filament_types.3mf        # Available filament profiles
@@ -74,7 +118,7 @@ The converter performs the following transformations:
 2. **Filament Mapping**: Remaps filament types to U1 compatible profiles
 3. **Color Preservation**: Maintains all color painting data from the original file
 4. **Support Detection**: Checks `different_settings_to_system` for `enable_support` and uses the appropriate template
-5. **Filament Padding**: Ensures 4 filaments are always configured (fills empty slots with white PLA)
+5. **Filament Padding**: Ensures at least 4 filaments are configured (fills empty slots with white PLA)
 
 ### File Cleanup
 
@@ -82,7 +126,7 @@ Uploaded files are automatically deleted after 8 hours to save disk space.
 
 ## Limitations
 
-- Maximum 4 filaments/colors (U1 hardware limitation)
+- The U1 has 4 toolheads; files with more than 4 colors convert fine, but printing them needs filament swaps
 - The converted file must be sliced in Snapmaker Orca before printing
 - Some advanced Bambu-specific features may not transfer
 
