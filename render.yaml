@@ -1,0 +1,9 @@
+# One-click deploy to Render: https://render.com/deploy?repo=https://github.com/kbaker827/bl2u1
+services:
+  - type: web
+    name: bl2u1
+    runtime: docker
+    plan: free
+    branch: main
+    healthCheckPath: /filament-types
+    autoDeploy: true
