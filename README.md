@@ -8,7 +8,10 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 
 **Original live version:** [https://bl2u1.nbn.cat](https://bl2u1.nbn.cat)
 
-**Run this fork as your own website (one click):**
+**This fork's live version:** [https://bl2u1.onrender.com](https://bl2u1.onrender.com)
+(free hosting: the first visit after a quiet spell can take ~30 seconds to load)
+
+**Run your own copy as a website (one click):**
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/kbaker827/bl2u1)
 
