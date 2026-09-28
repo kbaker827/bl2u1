@@ -152,4 +152,4 @@ MIT License - feel free to use, modify, and distribute.
 
 ## Support
 
-If you find this tool useful, consider [buying me a coffee](https://buymeacoffee.com/josuanbn)!
+If you find this tool useful, consider [buying me a coffee](https://buymeacoffee.com/goofoo)!
