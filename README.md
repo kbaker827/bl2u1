@@ -4,7 +4,10 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 
 > This is a fork of [josuanbn/bl2u1](https://github.com/josuanbn/bl2u1) that includes the
 > changes proposed in the upstream pull requests (security fixes, original filenames,
-> no 4-filament cap, batch conversion, a model library and Docker support).
+> no 4-filament cap, batch conversion, a model library and Docker support), plus
+> its own fixes: correct colours for multi-plate and painted models, an optional
+> password for the Library, keeping your print setting changes, safer upload
+> handling, and an automated test suite.
 
 **Original live version:** [https://bl2u1.nbn.cat](https://bl2u1.nbn.cat)
 
@@ -36,10 +39,14 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 
 ## How It Works
 
-1. Upload your Bambu Lab .3mf file
-2. Review and adjust filament colors/types if needed
-3. Click "Convert and Download"
-4. Open the converted file in **Snapmaker Orca** for final slicing
+1. Upload one or more Bambu Lab .3mf files (or a whole folder)
+2. Review and adjust filament colors/types if needed. Each filament is listed
+   once, in its original slot order; filaments that no sliced plate uses are
+   dimmed and marked "unused"
+3. Leave **Keep my print setting changes** ticked to carry over the settings you
+   changed in Bambu Studio, or untick it to use the plain U1 0.20mm Standard profile
+4. Click "Convert and Download" (or "Convert All", then "ZIP All" for a batch)
+5. Open the converted file in **Snapmaker Orca** for final slicing
 
 ## Hosting This Fork on the Web
 
@@ -65,7 +72,13 @@ or restart, so the Library tab is not permanent. Attach a Render persistent
 disk at `/app/inventory` (paid plan) if the library needs to persist.
 
 Any other Docker host (Fly.io, Railway, a VPS) also works. The container
-listens on `$PORT` (default `8080`).
+listens on `$PORT` (default `8080`), and `/healthz` returns `{"ok": true}` for
+health checks.
+
+Run a single server process (the Dockerfile uses `gunicorn --workers 1
+--threads 8`). Upload sessions are kept in memory, so a second worker would not
+recognise sessions created by the first. Add threads, not workers, to handle
+more users.
 
 ## Self-Hosting
 
@@ -107,6 +120,21 @@ Library, start it with `ADMIN_TOKEN=your-long-password docker compose up -d`.
 | `LIBRARY_ENABLED` | `true` | Set to `false` to hide the Library tab and disable its API. |
 | `PORT` | `8080` | Port the Docker image listens on. |
 | `BL2U1_UPLOAD_DIR` / `BL2U1_INVENTORY_DIR` | `uploads/` / `inventory/` | Storage folders. |
+| `FLASK_DEBUG` | `false` | Flask debug mode when running `python app.py`. Never enable it on a public server. |
+
+### Library Password
+
+When `ADMIN_TOKEN` is set, every Library request (listing, upload, download,
+edit, delete) needs the password; the converter itself stays public. The web
+page asks for it once and remembers it in that browser's local storage. To
+forget it, clear the site's data in your browser. Scripts send it in an
+`X-Admin-Token` header:
+
+```bash
+curl -H "X-Admin-Token: your-long-password" https://your-site/api/inventory
+```
+
+Use a long random value: the server does not limit login attempts.
 
 ### Running the Tests
 
@@ -115,7 +143,9 @@ pip install -r requirements-dev.txt
 pytest --cov=.
 ```
 
-GitHub Actions runs the same tests on every push and pull request.
+GitHub Actions runs the same tests (Python 3.10 and 3.12) on every pull
+request and every push to `main`, and fails if coverage drops below 80%.
+The tests build small synthetic .3mf files, so no real models are needed.
 
 ### Project Structure
 
@@ -150,18 +180,32 @@ The converter requires template .3mf files configured for Snapmaker U1:
 
 The converter performs the following transformations:
 
-1. **Printer Profile**: Changes printer settings from Bambu Lab to Snapmaker U1
-2. **Filament Mapping**: Remaps filament types to U1 compatible profiles
+1. **Printer Profile**: Replaces the project settings with the U1 template and
+   sets the printer model in `slice_info.config` to Snapmaker U1
+2. **Filament Mapping**: Picks the U1 profile for each filament type: an exact
+   match first, then a few aliases (ASA → ABS, PCTG → PETG), then the longest
+   U1 type contained in the original (e.g. `PLA-CF` → PLA). Anything else falls
+   back to the first profile (PLA). You can override every choice in the page
 3. **Color Preservation**: Filament numbers are never changed, so object
-   assignments and painted regions keep pointing at the right filament.
-   The filament list comes from `project_settings.config`, which covers every plate.
+   assignments (`model_settings.config`) and painted regions (`3D/Objects/*.model`)
+   keep pointing at the right filament; those files are copied unchanged.
+   The filament list comes from `project_settings.config`, which covers every plate;
+   `slice_info.config` is only used to see which filaments are actually used
 4. **Support Detection**: Reads `enable_support` from the project settings and uses the appropriate template
 5. **Print Settings**: Settings listed as changed in `different_settings_to_system`
-   are copied over if they are on a safe list (layer heights are only kept between 0.04 and 0.32 mm)
+   are copied over if they are on a safe list: layer heights, wall loops,
+   top/bottom shells, infill density and pattern, surface patterns, single top wall, brim, support
+   type/style/angle, seam position, ironing, fuzzy skin and print sequence.
+   Layer heights are only kept between 0.04 and 0.32 mm (suitable for the U1's
+   0.4 mm nozzle). Speeds, temperatures and accelerations always come from the U1 profile
 6. **Filament Padding**: Ensures at least 4 filaments are configured (fills empty slots with white PLA)
 
 Uploads are checked before processing: archives with more than 10,000 entries or
-more than 1 GB of uncompressed data are rejected, and XML is parsed with defusedxml.
+more than 1 GB of uncompressed data are rejected, settings files over 32 MB are
+refused, entries with unsafe paths (such as `../`) are skipped, and XML is parsed
+with defusedxml. Files are copied in a streaming fashion rather than loaded into
+memory. Error messages shown in the browser never include server internals; full
+details go to the server log.
 
 ### File Cleanup
 
@@ -171,6 +215,10 @@ ZIP bundles are deleted as soon as they have been downloaded.
 ## Limitations
 
 - The U1 has 4 toolheads; files with more than 4 colors convert fine, but printing them needs filament swaps
+- Unused filaments are kept rather than removed, because removing them would mean
+  renumbering the painted regions. A project with 8 filaments loaded but only 2
+  used converts with all 8 (the unused ones are marked in the page)
+- Up to 200 MB per file and 50 files per batch
 - The converted file must be sliced in Snapmaker Orca before printing
 - Some advanced Bambu-specific features may not transfer
 
