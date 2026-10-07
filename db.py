@@ -3,6 +3,8 @@
 import json
 import os
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 _CREATE_TABLE = """\
@@ -48,10 +50,19 @@ def init_db(db_path: str) -> None:
                 con.execute(sql)
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
+    """Open a connection, commit on success, and always close it.
+
+    (sqlite3's own context manager commits but leaves the connection open.)
+    """
     con = sqlite3.connect(_db_path, timeout=10)
     con.row_factory = sqlite3.Row
-    return con
+    try:
+        with con:
+            yield con
+    finally:
+        con.close()
 
 
 def add_item(

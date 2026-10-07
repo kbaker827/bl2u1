@@ -5,5 +5,10 @@ services:
     runtime: docker
     plan: free
     branch: main
-    healthCheckPath: /filament-types
+    healthCheckPath: /healthz
     autoDeploy: true
+    envVars:
+      # Password for the Library tab. Render generates a random value on first
+      # deploy; find it (or replace it) under Environment in the Render dashboard.
+      - key: ADMIN_TOKEN
+        generateValue: true

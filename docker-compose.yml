@@ -10,6 +10,11 @@ services:
       - inventory:/app/inventory
     environment:
       - FLASK_DEBUG=false
+      # Set a password to protect the Library tab (recommended if the
+      # server is reachable by other people). Leave empty for no password.
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      # Set to false to hide the Library tab entirely.
+      - LIBRARY_ENABLED=${LIBRARY_ENABLED:-true}
 
 volumes:
   uploads:
