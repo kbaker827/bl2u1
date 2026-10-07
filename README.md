@@ -22,9 +22,13 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 - Applies the 0.20mm Standard print profile for U1
 - Remaps filament types to U1 compatible profiles
 - Automatically enables Tree Supports (auto) if the original model has supports enabled
+- Optionally keeps the print settings you changed in Bambu Studio (layer height,
+  walls, infill, brim, support options); speeds and temperatures always come from the U1 profile
+- Multi-plate projects are handled; filaments not used by any sliced plate are marked "unused"
 - Supports files with more than 4 filaments (all colors are kept)
 - Batch conversion of multiple files, with a single ZIP download
 - Library tab to keep converted models, with title, description, tags and search
+  (can be password protected)
 - Real-time upload progress bar
 - Downloaded file keeps the original name (e.g. `my_model-U1.3mf`)
 - Simple drag & drop interface
@@ -47,7 +51,13 @@ Docker. Static hosts such as GitHub Pages will not work. The repo includes a
 2. Accept the defaults and click **Apply**. Render builds the `Dockerfile`.
 3. After a few minutes the site is live at `https://bl2u1-XXXX.onrender.com`.
    Every push to `main` redeploys automatically.
-4. Optional: add your own domain under *Settings → Custom Domains* in Render.
+4. Render generates a random **Library password** (`ADMIN_TOKEN`). Find it, or
+   replace it with your own, under *Environment* in the Render dashboard. The
+   Library tab asks for it once per browser.
+5. Optional: add your own domain under *Settings → Custom Domains* in Render.
+
+If your Render service was created by hand rather than with the button,
+`render.yaml` is not used: add an `ADMIN_TOKEN` environment variable yourself.
 
 Free-tier notes: the site sleeps after 15 minutes without visitors (the next
 visit takes about 30 seconds to wake it), and the disk is reset on each deploy
@@ -61,8 +71,8 @@ listens on `$PORT` (default `8080`).
 
 ### Requirements
 
-- Python 3.8+
-- Flask
+- Python 3.10+
+- Flask and defusedxml (installed from `requirements.txt`)
 
 ### Installation
 
@@ -86,14 +96,37 @@ The application will be available at `http://localhost:8080`
 docker compose up -d
 ```
 
-Uploads and the library are stored in Docker volumes.
+Uploads and the library are stored in Docker volumes. To password-protect the
+Library, start it with `ADMIN_TOKEN=your-long-password docker compose up -d`.
+
+### Settings
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `ADMIN_TOKEN` | empty | Password for the Library tab. Empty means no password, so set one on any server other people can reach. |
+| `LIBRARY_ENABLED` | `true` | Set to `false` to hide the Library tab and disable its API. |
+| `PORT` | `8080` | Port the Docker image listens on. |
+| `BL2U1_UPLOAD_DIR` / `BL2U1_INVENTORY_DIR` | `uploads/` / `inventory/` | Storage folders. |
+
+### Running the Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest --cov=.
+```
+
+GitHub Actions runs the same tests on every push and pull request.
 
 ### Project Structure
 
 ```
 bl2u1/
-├── app.py                    # Flask backend
+├── app.py                    # Flask app: upload, convert and download routes
+├── converter.py              # Conversion logic (no Flask)
+├── library.py                # Library API (password check lives here)
 ├── db.py                     # SQLite storage for the Library tab
+├── utils.py                  # Path and filename helpers
+├── tests/                    # pytest suite
 ├── Dockerfile / docker-compose.yml
 ├── render.yaml               # One-click Render deployment
 ├── templates/
@@ -119,13 +152,21 @@ The converter performs the following transformations:
 
 1. **Printer Profile**: Changes printer settings from Bambu Lab to Snapmaker U1
 2. **Filament Mapping**: Remaps filament types to U1 compatible profiles
-3. **Color Preservation**: Maintains all color painting data from the original file
-4. **Support Detection**: Checks `different_settings_to_system` for `enable_support` and uses the appropriate template
-5. **Filament Padding**: Ensures at least 4 filaments are configured (fills empty slots with white PLA)
+3. **Color Preservation**: Filament numbers are never changed, so object
+   assignments and painted regions keep pointing at the right filament.
+   The filament list comes from `project_settings.config`, which covers every plate.
+4. **Support Detection**: Reads `enable_support` from the project settings and uses the appropriate template
+5. **Print Settings**: Settings listed as changed in `different_settings_to_system`
+   are copied over if they are on a safe list (layer heights are only kept between 0.04 and 0.32 mm)
+6. **Filament Padding**: Ensures at least 4 filaments are configured (fills empty slots with white PLA)
+
+Uploads are checked before processing: archives with more than 10,000 entries or
+more than 1 GB of uncompressed data are rejected, and XML is parsed with defusedxml.
 
 ### File Cleanup
 
 Uploaded files are automatically deleted after 8 hours to save disk space.
+ZIP bundles are deleted as soon as they have been downloaded.
 
 ## Limitations
 

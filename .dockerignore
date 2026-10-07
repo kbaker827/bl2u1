@@ -6,3 +6,8 @@ __pycache__/
 README.md
 LICENSE
 inventory/
+tests/
+.github/
+requirements-dev.txt
+.pytest_cache/
+.coverage
