@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bambu to Snapmaker U1 Converter</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="description" content="Convert Bambu Lab .3mf projects to Snapmaker U1 format, keeping multi-color painting.">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <!-- Built from templates/ by `npm run build:css` (see README) -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body class="bg-slate-900 text-slate-200 font-sans min-h-screen flex flex-col items-center py-10">
@@ -200,7 +203,7 @@
 
     <p class="mt-4 text-xs text-slate-500 text-center">
         <i class="fa-solid fa-clock mr-1"></i>Uploaded files are automatically deleted from the server after 8 hours.
-        Library files are kept permanently.
+        Library files are kept until you delete them, unless the server has no persistent storage.
     </p>
 
     <a href="https://buymeacoffee.com/goofoo" target="_blank" rel="noopener noreferrer"
@@ -269,6 +272,22 @@
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
         }
+
+        // ----------------------------------------------------------------
+        // Server responses. Errors from the hosting platform (e.g. while a
+        // sleeping free-tier server wakes up) are HTML, not JSON.
+        // ----------------------------------------------------------------
+        function serverError(status) {
+            if (status === 413) return 'File is too large (max 200 MB).';
+            if (status === 429) return 'Too many uploads. Please wait a few minutes and try again.';
+            if (status === 0 || (status >= 502 && status <= 504))
+                return 'The server is starting up or busy. Wait about 30 seconds and try again.';
+            return `Server error (${status}). Please try again.`;
+        }
+        function parseJson(text, status) {
+            try { return JSON.parse(text); } catch { return { error: serverError(status) }; }
+        }
+        async function readJson(res) { return parseJson(await res.text(), res.status); }
 
         // ----------------------------------------------------------------
         // Error banner
@@ -362,13 +381,13 @@
                 xhr.open('POST', '/analyze');
                 xhr.addEventListener('load', () => {
                     try {
-                        const data = JSON.parse(xhr.responseText);
-                        if (xhr.status >= 400) throw new Error(data.error || 'Upload failed');
+                        const data = parseJson(xhr.responseText, xhr.status);
+                        if (xhr.status >= 400 || !data.session_id) throw new Error(data.error || serverError(xhr.status));
                         entry.sessionId = data.session_id; entry.filaments = data.filaments; entry.status = 'ready';
                     } catch (err) { entry.status = 'error'; entry.error = err.message; }
                     resolve();
                 });
-                xhr.addEventListener('error', () => { entry.status = 'error'; entry.error = 'Connection error'; resolve(); });
+                xhr.addEventListener('error', () => { entry.status = 'error'; entry.error = serverError(0); resolve(); });
                 xhr.send(fd);
             });
         }
@@ -436,13 +455,15 @@
             const opts = availableFilamentTypes.map(ft => `<option value="${esc(ft.type)}"${ft.type===mt?' selected':''}>${esc(ft.type)}</option>`).join('');
             const unused = fil.used === false
                 ? '<span class="ml-2 text-[10px] uppercase tracking-wide bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded" title="Not used by any sliced plate">unused</span>' : '';
+            const noProfile = fil.unmapped
+                ? `<span class="ml-2 text-[10px] uppercase tracking-wide bg-amber-900/60 text-amber-300 px-1.5 py-0.5 rounded" title="${esc(fil.type)} has no Snapmaker U1 profile, so ${esc(mt)} settings will be used. Check the type before printing.">no U1 profile</span>` : '';
             const sz = compact
                 ? { row:'bg-slate-600/50 p-3', dot:'w-6 h-6', name:'font-medium text-sm', color:'h-8 w-12', select:'text-xs p-1.5', arrow:'text-xs' }
                 : { row:'bg-slate-700 p-4', dot:'w-8 h-8', name:'font-bold', color:'h-10 w-14', select:'text-sm p-2', arrow:'' };
             return `<div class="${sz.row} rounded flex items-center justify-between gap-3${fil.used === false ? ' opacity-60' : ''}">
                 <div class="flex items-center gap-3 min-w-0 flex-1">
                     <div class="${sz.dot} rounded-full border border-gray-500 shadow flex-shrink-0" style="background-color:${esc(fil.color)}"></div>
-                    <div class="min-w-0"><p class="${sz.name} text-white">Filament ${esc(fil.id)}${unused}</p><p class="text-xs text-gray-400">Original: ${esc(fil.type||'Unknown')}</p></div>
+                    <div class="min-w-0"><p class="${sz.name} text-white">Filament ${esc(fil.id)}${unused}${noProfile}</p><p class="text-xs text-gray-400">Original: ${esc(fil.type||'Unknown')}</p></div>
                 </div>
                 <i class="fa-solid fa-arrow-right text-gray-500 flex-shrink-0 ${sz.arrow}"></i>
                 <div class="flex gap-2 flex-shrink-0">
@@ -477,7 +498,7 @@
                     const e = batchFiles[0], colors = collectColors(e.sessionId);
                     if (!Object.keys(colors).length) { showError('No filaments configured.'); setConverting(false); return; }
                     const res = await fetch('/convert', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:e.sessionId,colors,keep_settings}) });
-                    const data = await res.json();
+                    const data = await readJson(res);
                     if (!res.ok || !data.download_url) throw new Error(data.error || 'Conversion failed');
                     e.status='done'; e.downloadUrl=data.download_url; e.downloadName=data.download_name;
                     const a = document.createElement('a'); a.href=data.download_url; if (data.download_name) a.download=data.download_name; document.body.appendChild(a); a.click(); a.remove();
@@ -486,7 +507,8 @@
                     for (const e of batchFiles) { if (e.status!=='ready') continue; e.status='converting'; sessions[e.sessionId]={colors:collectColors(e.sessionId)}; }
                     renderBatchUI();
                     const res = await fetch('/convert-batch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessions,keep_settings}) });
-                    const data = await res.json();
+                    const data = await readJson(res);
+                    if (data.error && !data.results) throw new Error(data.error);
                     for (const r of (data.results||[])) { const e=batchFiles.find(f=>f.sessionId===r.session_id); if(e){e.status='done';e.downloadUrl=r.download_url;e.downloadName=r.download_name;} }
                     for (const r of (data.errors||[])) { const e=batchFiles.find(f=>f.sessionId===r.session_id); if(e){e.status='error';e.error=r.error||'Failed';} }
                     renderBatchUI();
@@ -501,7 +523,7 @@
             if (!ids.length) return; btnZip.disabled = true;
             try {
                 const res = await fetch('/download-zip', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_ids:ids}) });
-                if (!res.ok) { const d = await res.json(); throw new Error(d.error||'ZIP failed'); }
+                if (!res.ok) { const d = await readJson(res); throw new Error(d.error||'ZIP failed'); }
                 const blob = await res.blob(); const url = URL.createObjectURL(blob);
                 const a = document.createElement('a'); a.href=url; a.download='converted_files.zip'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
             } catch (err) { showError(err.message); }
@@ -563,7 +585,7 @@
         async function downloadItem(id, name) {
             try {
                 const res = await libFetch(`/api/inventory/${id}/download`);
-                if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Download failed'); }
+                if (!res.ok) { const d = await readJson(res); throw new Error(d.error || 'Download failed'); }
                 const url = URL.createObjectURL(await res.blob());
                 const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
             } catch (err) { if (!(err instanceof LockedError)) showInvError(err.message); }
@@ -615,10 +637,10 @@
                     xhr.addEventListener('load', () => {
                         progressBar.style.width = '100%';
                         if (xhr.status === 401) { try { handleUnauthorized(); } catch (e) { reject(e); } return; }
-                        try { resolve(JSON.parse(xhr.responseText)); }
-                        catch { reject(new Error('Invalid response')); }
+                        const data = parseJson(xhr.responseText, xhr.status);
+                        if (data.error && !data.items) reject(new Error(data.error)); else resolve(data);
                     });
-                    xhr.addEventListener('error', () => reject(new Error('Connection error')));
+                    xhr.addEventListener('error', () => reject(new Error(serverError(0))));
                     xhr.send(fd);
                 });
 
@@ -649,8 +671,8 @@
             try {
                 const url = '/api/inventory' + (query ? `?q=${encodeURIComponent(query)}` : '');
                 const res = await libFetch(url);
-                if (!res.ok) throw new Error('Could not load library.');
-                const items = await res.json();
+                const items = await readJson(res);
+                if (!res.ok || !Array.isArray(items)) throw new Error(items.error || 'Could not load library.');
                 grid.innerHTML = '';
                 if (!items.length) {
                     empty.classList.remove('hidden');
@@ -675,7 +697,7 @@
                         : '<span class="text-xs bg-green-900/50 text-green-400 px-2 py-0.5 rounded">U1 Native</span>';
 
                     const tags = (item.tags || []);
-                    const tagHtml = tags.map(t => `<span class="text-xs bg-slate-600 text-slate-300 px-1.5 py-0.5 rounded">${esc(t)}</span>`).join('');
+                    const tagHtml = tags.map(t => `<span class="text-xs bg-slate-600 text-slate-300 pl-1.5 pr-1 py-0.5 rounded inline-flex items-center gap-1">${esc(t)}<button type="button" class="inv-tag-remove text-slate-400 hover:text-red-300 leading-none" data-tag="${esc(t)}" aria-label="Remove tag ${esc(t)}" title="Remove tag">&times;</button></span>`).join('');
 
                     card.innerHTML = `
                         <div class="flex items-center gap-1.5">${swatches}</div>
@@ -708,6 +730,11 @@
                     card.querySelector('.inv-title').addEventListener('blur', (e) => saveField(e.target.dataset.id, 'title', e.target.value));
                     card.querySelector('.inv-desc').addEventListener('blur', (e) => saveField(e.target.dataset.id, 'description', e.target.value));
 
+                    // Tags: click × to remove a tag
+                    card.querySelectorAll('.inv-tag-remove').forEach(btn => btn.addEventListener('click', () => {
+                        saveField(item.id, 'tags', tags.filter(t => t !== btn.dataset.tag)).then(() => loadInventory());
+                    }));
+
                     // Tags: press Enter to add a tag
                     const tagInput = card.querySelector('.inv-tags');
                     tagInput.addEventListener('keydown', (e) => {
@@ -725,7 +752,7 @@
                     });
                 });
             } catch (err) {
-                if (!(err instanceof LockedError)) showInvError('Could not load library.');
+                if (!(err instanceof LockedError)) showInvError(err.message || 'Could not load library.');
             }
         }
 
@@ -736,7 +763,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ [field]: value }),
                 });
-                if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Save failed'); }
+                if (!res.ok) { const d = await readJson(res); throw new Error(d.error || 'Save failed'); }
             } catch (err) {
                 if (!(err instanceof LockedError)) showInvError(`Could not save ${field}: ${err.message}`);
             }
@@ -746,7 +773,7 @@
             if (!confirm('Delete this file from the library?')) return;
             try {
                 const res = await libFetch(`/api/inventory/${id}`, { method: 'DELETE' });
-                if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Delete failed'); }
+                if (!res.ok) { const d = await readJson(res); throw new Error(d.error || 'Delete failed'); }
                 loadInventory();
             } catch (err) { if (!(err instanceof LockedError)) showInvError(err.message); }
         }

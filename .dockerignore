@@ -11,3 +11,8 @@ tests/
 requirements-dev.txt
 .pytest_cache/
 .coverage
+node_modules/
+package-lock.json
+package.json
+tailwind.config.js
+assets/

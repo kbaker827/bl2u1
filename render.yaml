@@ -12,3 +12,7 @@ services:
       # deploy; find it (or replace it) under Environment in the Render dashboard.
       - key: ADMIN_TOKEN
         generateValue: true
+      # Render's load balancer adds the visitor's IP to X-Forwarded-For; trust
+      # one hop so per-visitor upload limits see real IPs, not the proxy's.
+      - key: TRUST_PROXY_HOPS
+        value: "1"

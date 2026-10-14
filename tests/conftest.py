@@ -19,6 +19,7 @@ os.environ.pop('LIBRARY_ENABLED', None)
 
 import app as app_module  # noqa: E402
 import converter  # noqa: E402
+from limits import RateLimiter  # noqa: E402
 
 RED, GREEN, BLUE, YELLOW = '#FF0000FF', '#00FF00FF', '#0000FFFF', '#FFFF00FF'
 FOUR_COLORS = [RED, GREEN, BLUE, YELLOW]
@@ -78,6 +79,9 @@ def read_settings(path_or_bytes):
 def flask_app(monkeypatch):
     monkeypatch.setitem(app_module.app.config, 'ADMIN_TOKEN', '')
     monkeypatch.setitem(app_module.app.config, 'LIBRARY_ENABLED', True)
+    # Fresh, disabled abuse guards so tests don't share hit counts
+    monkeypatch.setitem(app_module.app.config, 'UPLOAD_LIMITER', RateLimiter(0))
+    monkeypatch.setitem(app_module.app.config, 'AUTH_FAIL_LIMITER', RateLimiter(0))
     app_module.app.config['TESTING'] = True
     return app_module.app
 
@@ -95,6 +99,11 @@ def profiles():
 @pytest.fixture
 def templates():
     return app_module.app.config['U1_TEMPLATES']
+
+
+@pytest.fixture
+def materials():
+    return app_module.app.config['MATERIAL_SETTINGS']
 
 
 @pytest.fixture

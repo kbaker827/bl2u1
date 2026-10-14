@@ -19,3 +19,17 @@ jobs:
           cache: pip
       - run: pip install -r requirements-dev.txt
       - run: pytest --cov=. --cov-report=term-missing --cov-fail-under=80
+
+  css:
+    # static/css/app.css is committed so the server needs no Node.js.
+    # Fail if someone changed templates/ without rebuilding it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:css
+      - run: git diff --exit-code static/css/app.css || (echo "::error::static/css/app.css is out of date. Run 'npm run build:css' and commit the result." && exit 1)

@@ -8,10 +8,12 @@ import logging
 from threading import Timer, Lock
 from flask import Flask, render_template, request, send_file, jsonify
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import converter
 import db
 import library
+from limits import RateLimiter, folder_size
 from converter import ConversionError
 from utils import filename_stem, remove_quietly, safe_join, sanitize_download_name
 
@@ -41,6 +43,14 @@ def _env_flag(name: str, default: bool) -> bool:
     return default if value is None else value.strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        logging.getLogger(__name__).warning("Ignoring non-numeric %s", name)
+        return default
+
+
 app = Flask(__name__)
 app.config.update(
     UPLOAD_FOLDER=UPLOAD_FOLDER,
@@ -48,10 +58,21 @@ app.config.update(
     MAX_CONTENT_LENGTH=MAX_UPLOAD_MB * 1024 * 1024,
     FILAMENT_PROFILES=converter.load_filament_profiles(FILAMENT_PROFILES_FILE),
     U1_TEMPLATES=converter.load_templates(TEMPLATE_PATHS),
+    MATERIAL_SETTINGS=converter.load_material_settings(FILAMENT_PROFILES_FILE),
     ADMIN_TOKEN=os.environ.get('ADMIN_TOKEN', '').strip(),
     LIBRARY_ENABLED=_env_flag('LIBRARY_ENABLED', True),
     MAX_BATCH=MAX_BATCH,
+    # Abuse guards for public servers (0 disables each one)
+    UPLOAD_LIMITER=RateLimiter(_env_int('UPLOADS_PER_HOUR', 200)),
+    AUTH_FAIL_LIMITER=RateLimiter(_env_int('LIBRARY_LOGIN_ATTEMPTS_PER_HOUR', 20)),
+    MAX_UPLOAD_STORAGE_MB=_env_int('MAX_UPLOAD_STORAGE_MB', 2048),
 )
+
+# Behind a hosting platform's proxy, the visitor's IP is in X-Forwarded-For.
+# Only trust that header when told how many proxies sit in front of the app.
+_proxy_hops = _env_int('TRUST_PROXY_HOPS', 0)
+if _proxy_hops > 0:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_proxy_hops)
 
 try:
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -104,6 +125,9 @@ def cleanup_old_files() -> None:
             if p is None or not os.path.exists(p):
                 _session_names.pop(sid, None)
 
+    app.config['UPLOAD_LIMITER'].prune()
+    app.config['AUTH_FAIL_LIMITER'].prune()
+
 
 def _schedule_cleanup(interval: int = CLEANUP_INTERVAL_SECONDS) -> None:
     cleanup_old_files()
@@ -118,6 +142,25 @@ _schedule_cleanup()
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+_UPLOAD_ENDPOINTS = {'analyze', 'library.inventory_upload'}
+
+
+@app.before_request
+def _upload_guard():
+    """Limit uploads per visitor and stop accepting files when storage is full."""
+    if request.endpoint not in _UPLOAD_ENDPOINTS:
+        return None
+    # Each file counts, so a 50-file Library batch costs 50, not 1
+    cost = sum(1 for f in request.files.getlist('files') if f.filename) or 1
+    if not app.config['UPLOAD_LIMITER'].allow(request.remote_addr or 'unknown', cost):
+        return jsonify({'error': 'Too many uploads. Please wait a few minutes and try again.'}), 429
+    limit_mb = app.config['MAX_UPLOAD_STORAGE_MB']
+    if limit_mb > 0 and folder_size(UPLOAD_FOLDER) > limit_mb * 1024 * 1024:
+        logger.warning("Upload storage is over %d MB; rejecting uploads until cleanup", limit_mb)
+        return jsonify({'error': 'The server is busy right now. Please try again later.'}), 503
+    return None
+
+
 @app.errorhandler(RequestEntityTooLarge)
 def handle_file_too_large(_e):
     return jsonify({'error': f'File is too large. Maximum size is {MAX_UPLOAD_MB} MB.'}), 413
@@ -134,6 +177,10 @@ def index():
 
 @app.route('/healthz')
 def healthz():
+    # Report unhealthy if the U1 templates failed to load, so a broken deploy
+    # is caught by the platform's health check instead of by users.
+    if len(app.config['U1_TEMPLATES']) < len(TEMPLATE_PATHS):
+        return jsonify({'ok': False, 'error': 'U1 templates not loaded'}), 503
     return jsonify({'ok': True})
 
 
@@ -195,6 +242,7 @@ def _do_convert(session_id, user_colors, keep_settings: bool = True) -> tuple[di
             profiles=app.config['FILAMENT_PROFILES'],
             templates=app.config['U1_TEMPLATES'],
             keep_settings=keep_settings,
+            materials=app.config['MATERIAL_SETTINGS'],
         )
     except ConversionError as e:
         return {'error': str(e)}, 400

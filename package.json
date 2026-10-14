@@ -1,0 +1,11 @@
+{
+  "name": "bl2u1",
+  "private": true,
+  "description": "Builds static/css/app.css from the Tailwind classes used in templates/",
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.js -i assets/tailwind.css -o static/css/app.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.19"
+  }
+}

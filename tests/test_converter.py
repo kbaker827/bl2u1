@@ -114,6 +114,51 @@ def test_convert_keeps_more_than_four_filaments(write_3mf, profiles, templates, 
                if k.startswith('filament_') and isinstance(v, list))
 
 
+def test_convert_applies_each_materials_own_settings(write_3mf, profiles, templates,
+                                                     materials, tmp_path):
+    # Regression: ABS/PETG/TPU slots used to keep the template's PLA temperatures.
+    src = write_3mf(types=['ABS', 'PETG', 'TPU', 'PLA'], slice_info=None)
+    out = str(tmp_path / 'o.3mf')
+    converter.convert(src, out, {}, profiles=profiles, templates=templates, materials=materials)
+    settings = read_settings(open(out, 'rb').read())
+
+    types = settings['filament_type']
+    assert types == ['ABS', 'PETG-HF', 'TPU', 'PLA']
+    for key in ('nozzle_temperature', 'hot_plate_temp', 'fan_max_speed',
+                'filament_max_volumetric_speed', 'filament_flow_ratio'):
+        assert settings[key] == [materials[t][key] for t in types], key
+    assert settings['nozzle_temperature'][0] != settings['nozzle_temperature'][3]
+
+
+def test_convert_pads_material_settings_beyond_four(write_3mf, profiles, templates,
+                                                    materials, tmp_path):
+    src = write_3mf(colors=FOUR_COLORS + [RED], types=['PLA'] * 4 + ['TPU'], slice_info=None)
+    out = str(tmp_path / 'o.3mf')
+    converter.convert(src, out, {}, profiles=profiles, templates=templates, materials=materials)
+    settings = read_settings(open(out, 'rb').read())
+
+    assert len(settings['nozzle_temperature']) == 5
+    assert settings['filament_max_volumetric_speed'][4] == materials['TPU']['filament_max_volumetric_speed']
+    # Per-toolhead machine settings keep one entry per U1 toolhead
+    assert settings['nozzle_diameter'] == templates[False]['nozzle_diameter']
+
+
+def test_load_material_settings(materials):
+    assert {'PLA', 'PETG-HF', 'ABS', 'TPU'} <= set(materials)
+    assert 'nozzle_temperature' in materials['ABS']
+    assert 'nozzle_diameter' not in materials['ABS']
+
+
+def test_load_material_settings_falls_back(tmp_path):
+    assert converter.load_material_settings(str(tmp_path / 'missing.3mf')) == {}
+
+
+def test_parse_flags_materials_without_u1_profile(write_3mf, profiles):
+    src = write_3mf(types=['PLA', 'PA-CF', 'PETG', ''], slice_info=None)
+    assert [f['unmapped'] for f in converter.parse_filaments(src, profiles)] == [
+        False, True, False, False]
+
+
 def test_convert_applies_user_choices(write_3mf, profiles, templates, tmp_path):
     src = write_3mf(slice_info=plate([1, 2]))
     petg = next(p for p in profiles if 'PETG' in p['type'])
