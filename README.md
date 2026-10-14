@@ -18,6 +18,19 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/kbaker827/bl2u1)
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/upload.png" alt="Upload page with a drag-and-drop area for .3mf files"><br><b>1. Upload</b> one file, several, or a whole folder</td>
+    <td width="50%"><img src="docs/screenshots/filaments.png" alt="Filament list with a colour and U1 material picker for each slot"><br><b>2. Check filaments</b>: change colours or materials; unused slots and materials with no U1 profile are flagged</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/batch.png" alt="Batch of three converted files with download buttons and a ZIP All button"><br><b>3. Batch convert</b> and download each file or a single ZIP</td>
+    <td width="50%"><img src="docs/screenshots/library.png" alt="Library tab with model cards showing colours, titles, descriptions and tags"><br><b>4. Library</b>: keep converted models with titles, descriptions, tags and search</td>
+  </tr>
+</table>
+
 ## Features
 
 - Converts Bambu Lab/Bambu Studio .3mf files to Snapmaker U1 compatible format
@@ -197,6 +210,7 @@ bl2u1/
 ├── templates/
 │   └── index.html            # Frontend interface
 ├── static/                   # Built CSS (static/css/app.css) and favicon
+├── docs/screenshots/         # Images used in this README
 ├── assets/tailwind.css       # Tailwind source for static/css/app.css
 ├── uploads/                  # Temporary file storage (auto-cleaned)
 ├── inventory/                # Library files and database
