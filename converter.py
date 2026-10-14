@@ -59,6 +59,36 @@ CARRY_OVER_KEYS = frozenset({
     'support_on_build_plate_only',
     'seam_position', 'ironing_type', 'fuzzy_skin', 'print_sequence',
 })
+# Per-filament settings that belong to the material rather than the machine.
+# Together with every filament_* list, these are copied from the chosen U1
+# profile so an ABS slot gets ABS temperatures, not the template's PLA ones.
+# Per-extruder machine settings (nozzle_diameter, retraction_length, z_hop, ...)
+# also have one entry per toolhead and are deliberately not listed here.
+MATERIAL_KEYS = frozenset({
+    'nozzle_temperature', 'nozzle_temperature_initial_layer',
+    'nozzle_temperature_range_low', 'nozzle_temperature_range_high',
+    'cool_plate_temp', 'cool_plate_temp_initial_layer',
+    'eng_plate_temp', 'eng_plate_temp_initial_layer',
+    'hot_plate_temp', 'hot_plate_temp_initial_layer',
+    'textured_plate_temp', 'textured_plate_temp_initial_layer',
+    'textured_cool_plate_temp', 'textured_cool_plate_temp_initial_layer',
+    'supertack_plate_temp', 'supertack_plate_temp_initial_layer',
+    'temperature_vitrification', 'idle_temperature', 'chamber_temperature',
+    'activate_chamber_temp_control', 'activate_air_filtration',
+    'during_print_exhaust_fan_speed', 'complete_print_exhaust_fan_speed',
+    'fan_min_speed', 'fan_max_speed', 'fan_cooling_layer_time',
+    'full_fan_speed_layer', 'close_fan_the_first_x_layers',
+    'additional_cooling_fan_speed', 'overhang_fan_speed', 'overhang_fan_threshold',
+    'enable_overhang_bridge_fan', 'internal_bridge_fan_speed', 'ironing_fan_speed',
+    'support_material_interface_fan_speed', 'reduce_fan_stop_start_freq',
+    'slow_down_for_layer_cooling', 'slow_down_layer_time', 'slow_down_min_speed',
+    'dont_slow_down_outer_wall',
+    'enable_pressure_advance', 'pressure_advance', 'adaptive_pressure_advance',
+    'adaptive_pressure_advance_bridges', 'adaptive_pressure_advance_model',
+    'adaptive_pressure_advance_overhangs',
+    'required_nozzle_HRC', 'pellet_flow_coefficient',
+})
+
 LAYER_HEIGHT_KEYS = frozenset({'layer_height', 'initial_layer_print_height'})
 MIN_LAYER_HEIGHT  = 0.04
 MAX_LAYER_HEIGHT  = 0.32   # 80% of the U1's 0.4 mm nozzle
@@ -92,6 +122,35 @@ def load_filament_profiles(path: str) -> list[dict]:
     except Exception as e:
         logger.warning("Could not load filament profiles (%s) -- using fallback defaults", e)
     return [dict(p) for p in FALLBACK_FILAMENTS]
+
+
+def _is_material_key(key: str) -> bool:
+    return key.startswith('filament_') or key in MATERIAL_KEYS
+
+
+def load_material_settings(path: str) -> dict[str, dict[str, str]]:
+    """Read each U1 profile's own per-filament values, keyed by filament type.
+
+    Returns {} if the file can't be read; conversions then keep the template's
+    values (the behaviour before profiles were applied).
+    """
+    try:
+        with zipfile.ZipFile(path, 'r') as z:
+            settings = json.loads(z.read(PROJECT_SETTINGS).decode('utf-8'))
+        types = settings.get('filament_type', [])
+        materials: dict[str, dict[str, str]] = {}
+        for i, ftype in enumerate(types):
+            if ftype in materials:
+                continue
+            materials[ftype] = {
+                key: val[i] for key, val in settings.items()
+                if _is_material_key(key) and isinstance(val, list) and len(val) == len(types)
+            }
+        logger.info("Loaded material settings for %d filament types", len(materials))
+        return materials
+    except Exception as e:
+        logger.warning("Could not load material settings (%s) -- using template values", e)
+        return {}
 
 
 def load_templates(paths: dict[bool, str]) -> dict[bool, dict]:
@@ -199,17 +258,15 @@ def _canonical(material: str) -> str:
     return material.upper().replace('-HF', '').replace('-', '').replace(' ', '')
 
 
-def auto_map_filament_type(original: str, profiles: list[dict]) -> str:
-    """Map a source filament type to the closest available U1 type.
+def match_filament_type(original: str, profiles: list[dict]) -> str | None:
+    """Return the U1 type matching a source filament type, or None if none fits.
 
     Exact match first, then alias, then the longest U1 type contained in the
     source type (so the result never depends on profile order).
     """
     types = [p['type'] for p in profiles]
-    if not types:
-        return PAD_TYPE
-    if not original or not isinstance(original, str):
-        return types[0]
+    if not types or not original or not isinstance(original, str):
+        return None
 
     up = original.strip().upper()
     for t in types:
@@ -225,7 +282,15 @@ def auto_map_filament_type(original: str, profiles: list[dict]) -> str:
     contained = [c for c in by_canonical if c and c in source]
     if contained:
         return by_canonical[max(contained, key=len)]
-    return types[0]
+    return None
+
+
+def auto_map_filament_type(original: str, profiles: list[dict]) -> str:
+    """Map a source filament type to the closest U1 type, falling back to the first."""
+    types = [p['type'] for p in profiles]
+    if not types:
+        return PAD_TYPE
+    return match_filament_type(original, profiles) or types[0]
 
 
 def _used_filament_ids(root: ET.Element | None) -> set[str] | None:
@@ -269,6 +334,9 @@ def parse_filaments(path: str, profiles: list[dict]) -> list[dict]:
             'color':       normalize_color(color),
             'type':        ftype if isinstance(ftype, str) and ftype else 'PLA',
             'mapped_type': auto_map_filament_type(ftype, profiles),
+            # True when the source material has no U1 profile and fell back to the default
+            'unmapped':    bool(isinstance(ftype, str) and ftype.strip())
+                           and match_filament_type(ftype, profiles) is None,
             'used':        (fid in used) if used is not None else None,
         }
         for fid, color, ftype in slots
@@ -375,8 +443,20 @@ def _mark_changed(diff, keys: list[str], filament_count: int) -> list[str]:
     return [';'.join(sorted(set(existing) | set(keys)))] + rest
 
 
+def _apply_materials(settings: dict, types: list[str],
+                     materials: dict[str, dict[str, str]]) -> None:
+    """Replace per-filament values with those of each slot's chosen profile."""
+    for key, val in settings.items():
+        if not (_is_material_key(key) and isinstance(val, list) and len(val) == len(types)):
+            continue
+        settings[key] = [
+            materials.get(t, {}).get(key, current) for t, current in zip(types, val)
+        ]
+
+
 def build_settings(template: dict, orig: dict, choices: list[dict],
-                   profiles: list[dict], keep_settings: bool) -> dict:
+                   profiles: list[dict], keep_settings: bool,
+                   materials: dict[str, dict[str, str]] | None = None) -> dict:
     """Return new U1 project settings for the given filament choices."""
     count  = max(TARGET_FILAMENTS_MIN, len(choices))
     padding = count - len(choices)
@@ -388,9 +468,10 @@ def build_settings(template: dict, orig: dict, choices: list[dict],
 
     settings = {
         key: _fit_list(val, count)
-        if key.startswith('filament_') and isinstance(val, list) and val else val
+        if _is_material_key(key) and isinstance(val, list) and val else val
         for key, val in copy.deepcopy(template).items()
     }
+    _apply_materials(settings, types, materials or {})
     settings['filament_colour']      = colors
     settings['filament_type']        = types
     settings['filament_settings_id'] = [profile_map.get(t, default_profile) for t in types]
@@ -453,11 +534,14 @@ def _write_archive(zin: zipfile.ZipFile, output_path: str,
 
 def convert(input_path: str, output_path: str, user_colors: dict, *,
             profiles: list[dict], templates: dict[bool, dict],
-            keep_settings: bool = True) -> None:
+            keep_settings: bool = True,
+            materials: dict[str, dict[str, str]] | None = None) -> None:
     """Convert a Bambu .3mf to U1 format.
 
     user_colors maps filament id -> {'color': '#RRGGBB', 'type': <U1 type>};
     filaments not listed keep their colour and get an auto-mapped type.
+    materials (from load_material_settings) supplies each type's temperatures,
+    fan, flow and other per-filament values.
     Raises ConversionError for problems the user can fix.
     """
     filaments = parse_filaments(input_path, profiles)
@@ -475,7 +559,7 @@ def convert(input_path: str, output_path: str, user_colors: dict, *,
             if template is None:
                 raise ConversionError('Server template missing -- please contact the administrator')
 
-            settings = build_settings(template, orig, choices, profiles, keep_settings)
+            settings = build_settings(template, orig, choices, profiles, keep_settings, materials)
             replacements = {
                 PROJECT_SETTINGS: json.dumps(settings, indent=4, ensure_ascii=False).encode('utf-8'),
             }

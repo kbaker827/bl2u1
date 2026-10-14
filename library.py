@@ -37,8 +37,14 @@ def _guard():
         return jsonify({'error': 'The library is disabled on this server'}), 404
     token = current_app.config['ADMIN_TOKEN']
     if token:
+        limiter = current_app.config['AUTH_FAIL_LIMITER']
+        client  = request.remote_addr or 'unknown'
+        if limiter.is_blocked(client):
+            return jsonify({'error': 'Too many wrong passwords. Try again in an hour.'}), 429
         given = request.headers.get(TOKEN_HEADER, '')
         if not hmac.compare_digest(given.encode('utf-8'), token.encode('utf-8')):
+            if given:   # an empty header is just the page checking, not a guess
+                limiter.allow(client)
             return jsonify({'error': 'Library password required', 'auth_required': True}), 401
     return None
 
@@ -115,7 +121,8 @@ def _add_file(file) -> dict:
             shutil.move(temp_path, dest_path)
         else:
             converter.convert(temp_path, dest_path, {}, profiles=profiles,
-                              templates=current_app.config['U1_TEMPLATES'])
+                              templates=current_app.config['U1_TEMPLATES'],
+                              materials=current_app.config['MATERIAL_SETTINGS'])
 
         return db.add_item(
             item_id=item_id,

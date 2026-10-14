@@ -23,10 +23,12 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 - Converts Bambu Lab/Bambu Studio .3mf files to Snapmaker U1 compatible format
 - Preserves color painting and multi-color assignments
 - Applies the 0.20mm Standard print profile for U1
-- Remaps filament types to U1 compatible profiles
+- Remaps filament types to U1 compatible profiles, applying each profile's own
+  temperatures, fan, flow and retraction settings (an ABS slot prints at ABS temperatures)
+- Flags materials that have no U1 profile (e.g. PA, PC) so you can pick a type yourself
 - Automatically enables Tree Supports (auto) if the original model has supports enabled
 - Optionally keeps the print settings you changed in Bambu Studio (layer height,
-  walls, infill, brim, support options); speeds and temperatures always come from the U1 profile
+  walls, infill, brim, support options); speeds and temperatures always come from the U1 profiles
 - Multi-plate projects are handled; filaments not used by any sliced plate are marked "unused"
 - Supports files with more than 4 filaments (all colors are kept)
 - Batch conversion of multiple files, with a single ZIP download
@@ -42,7 +44,8 @@ A web-based tool to convert Bambu Lab .3mf projects to Snapmaker U1 format, pres
 1. Upload one or more Bambu Lab .3mf files (or a whole folder)
 2. Review and adjust filament colors/types if needed. Each filament is listed
    once, in its original slot order; filaments that no sliced plate uses are
-   dimmed and marked "unused"
+   dimmed and marked "unused". Filaments marked **no U1 profile** use PLA
+   settings unless you pick another type
 3. Leave **Keep my print setting changes** ticked to carry over the settings you
    changed in Bambu Studio, or untick it to use the plain U1 0.20mm Standard profile
 4. Click "Convert and Download" (or "Convert All", then "ZIP All" for a batch)
@@ -63,8 +66,13 @@ Docker. Static hosts such as GitHub Pages will not work. The repo includes a
    Library tab asks for it once per browser.
 5. Optional: add your own domain under *Settings → Custom Domains* in Render.
 
+`render.yaml` also sets `TRUST_PROXY_HOPS=1` so upload limits count each
+visitor separately. Check it appears under *Environment* in the Render dashboard;
+without it, all visitors share one upload limit.
+
 If your Render service was created by hand rather than with the button,
-`render.yaml` is not used: add an `ADMIN_TOKEN` environment variable yourself.
+`render.yaml` is not used: add the `ADMIN_TOKEN` and `TRUST_PROXY_HOPS=1`
+environment variables yourself.
 
 Free-tier notes: the site sleeps after 15 minutes without visitors (the next
 visit takes about 30 seconds to wake it), and the disk is reset on each deploy
@@ -72,8 +80,9 @@ or restart, so the Library tab is not permanent. Attach a Render persistent
 disk at `/app/inventory` (paid plan) if the library needs to persist.
 
 Any other Docker host (Fly.io, Railway, a VPS) also works. The container
-listens on `$PORT` (default `8080`), and `/healthz` returns `{"ok": true}` for
-health checks.
+listens on `$PORT` (default `8080`) and runs as an unprivileged user.
+`/healthz` returns `{"ok": true}`, or HTTP 503 if the U1 templates failed to
+load, for health checks.
 
 Run a single server process (the Dockerfile uses `gunicorn --workers 1
 --threads 8`). Upload sessions are kept in memory, so a second worker would not
@@ -85,7 +94,7 @@ more users.
 ### Requirements
 
 - Python 3.10+
-- Flask and defusedxml (installed from `requirements.txt`)
+- Flask, defusedxml and gunicorn (pinned in `requirements.txt`)
 
 ### Installation
 
@@ -112,6 +121,13 @@ docker compose up -d
 Uploads and the library are stored in Docker volumes. To password-protect the
 Library, start it with `ADMIN_TOKEN=your-long-password docker compose up -d`.
 
+The container runs as user `app` (uid 1000). If you created the volumes with an
+older version of this image (which ran as root), give them to that user once:
+
+```bash
+docker compose run --rm --user root bl2u1 chown -R 1000:1000 /app/uploads /app/inventory
+```
+
 ### Settings
 
 | Environment variable | Default | Purpose |
@@ -120,6 +136,10 @@ Library, start it with `ADMIN_TOKEN=your-long-password docker compose up -d`.
 | `LIBRARY_ENABLED` | `true` | Set to `false` to hide the Library tab and disable its API. |
 | `PORT` | `8080` | Port the Docker image listens on. |
 | `BL2U1_UPLOAD_DIR` / `BL2U1_INVENTORY_DIR` | `uploads/` / `inventory/` | Storage folders. |
+| `UPLOADS_PER_HOUR` | `200` | Uploads allowed per visitor IP per hour (each file in a batch counts once). `0` disables the limit. |
+| `MAX_UPLOAD_STORAGE_MB` | `2048` | New uploads are refused while the uploads folder is bigger than this. `0` disables the check. |
+| `LIBRARY_LOGIN_ATTEMPTS_PER_HOUR` | `20` | Wrong Library passwords allowed per IP per hour before that IP is locked out for the rest of the hour. |
+| `TRUST_PROXY_HOPS` | `0` | Number of proxies in front of the app whose `X-Forwarded-For` should be trusted for the visitor IP. Set to `1` on Render; leave `0` when nothing sits in front. |
 | `FLASK_DEBUG` | `false` | Flask debug mode when running `python app.py`. Never enable it on a public server. |
 
 ### Library Password
@@ -134,7 +154,8 @@ forget it, clear the site's data in your browser. Scripts send it in an
 curl -H "X-Admin-Token: your-long-password" https://your-site/api/inventory
 ```
 
-Use a long random value: the server does not limit login attempts.
+Use a long random value. Wrong passwords are limited per IP (see
+`LIBRARY_LOGIN_ATTEMPTS_PER_HOUR`).
 
 ### Running the Tests
 
@@ -147,6 +168,19 @@ GitHub Actions runs the same tests (Python 3.10 and 3.12) on every pull
 request and every push to `main`, and fails if coverage drops below 80%.
 The tests build small synthetic .3mf files, so no real models are needed.
 
+### Page Styles
+
+The page uses [Tailwind CSS](https://tailwindcss.com). The built stylesheet,
+`static/css/app.css`, is committed so the server needs no Node.js. After
+changing classes in `templates/`, rebuild it:
+
+```bash
+npm install
+npm run build:css
+```
+
+GitHub Actions fails if `static/css/app.css` is out of date.
+
 ### Project Structure
 
 ```
@@ -156,11 +190,14 @@ bl2u1/
 ├── library.py                # Library API (password check lives here)
 ├── db.py                     # SQLite storage for the Library tab
 ├── utils.py                  # Path and filename helpers
+├── limits.py                 # Upload rate limit and storage guard
 ├── tests/                    # pytest suite
 ├── Dockerfile / docker-compose.yml
 ├── render.yaml               # One-click Render deployment
 ├── templates/
 │   └── index.html            # Frontend interface
+├── static/                   # Built CSS (static/css/app.css) and favicon
+├── assets/tailwind.css       # Tailwind source for static/css/app.css
 ├── uploads/                  # Temporary file storage (auto-cleaned)
 ├── inventory/                # Library files and database
 ├── u1_template.3mf           # U1 template without supports
@@ -174,7 +211,8 @@ The converter requires template .3mf files configured for Snapmaker U1:
 
 - `u1_template.3mf` - Base template with 0.20mm Standard profile, supports disabled
 - `u1_template_supports.3mf` - Same as above but with Tree Supports (auto) enabled
-- `filament_types.3mf` - Reference file containing available U1 filament profiles
+- `filament_types.3mf` - Reference file containing available U1 filament profiles,
+  including each profile's temperatures, fan, flow and other per-filament settings
 
 ## Technical Details
 
@@ -185,7 +223,11 @@ The converter performs the following transformations:
 2. **Filament Mapping**: Picks the U1 profile for each filament type: an exact
    match first, then a few aliases (ASA → ABS, PCTG → PETG), then the longest
    U1 type contained in the original (e.g. `PLA-CF` → PLA). Anything else falls
-   back to the first profile (PLA). You can override every choice in the page
+   back to the first profile (PLA) and is flagged "no U1 profile" in the page.
+   You can override every choice in the page. Every per-filament setting
+   (`filament_*` plus temperatures, plate temperatures, fan, cooling and pressure
+   advance) is then taken from the chosen profile in `filament_types.3mf`, while
+   per-toolhead machine settings (nozzle diameter, retraction, z-hop) stay as in the template
 3. **Color Preservation**: Filament numbers are never changed, so object
    assignments (`model_settings.config`) and painted regions (`3D/Objects/*.model`)
    keep pointing at the right filament; those files are copied unchanged.
@@ -197,7 +239,8 @@ The converter performs the following transformations:
    top/bottom shells, infill density and pattern, surface patterns, single top wall, brim, support
    type/style/angle, seam position, ironing, fuzzy skin and print sequence.
    Layer heights are only kept between 0.04 and 0.32 mm (suitable for the U1's
-   0.4 mm nozzle). Speeds, temperatures and accelerations always come from the U1 profile
+   0.4 mm nozzle). Speeds and accelerations come from the U1 print profile;
+   temperatures come from the chosen filament profiles
 6. **Filament Padding**: Ensures at least 4 filaments are configured (fills empty slots with white PLA)
 
 Uploads are checked before processing: archives with more than 10,000 entries or
@@ -218,7 +261,7 @@ ZIP bundles are deleted as soon as they have been downloaded.
 - Unused filaments are kept rather than removed, because removing them would mean
   renumbering the painted regions. A project with 8 filaments loaded but only 2
   used converts with all 8 (the unused ones are marked in the page)
-- Up to 200 MB per file and 50 files per batch
+- Up to 200 MB per file and 50 files per batch; 200 uploads per visitor per hour by default
 - The converted file must be sliced in Snapmaker Orca before printing
 - Some advanced Bambu-specific features may not transfer
 
