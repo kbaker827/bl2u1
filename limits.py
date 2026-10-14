@@ -15,8 +15,8 @@ class RateLimiter:
         self._hits: dict[str, deque] = {}
         self._lock  = Lock()
 
-    def allow(self, key: str) -> bool:
-        """Record an event for key; return False if it is over the limit."""
+    def allow(self, key: str, cost: int = 1) -> bool:
+        """Record `cost` events for key; return False (recording none) if that would exceed the limit."""
         if self.limit <= 0:
             return True
         now = time.monotonic()
@@ -24,9 +24,9 @@ class RateLimiter:
             hits = self._hits.setdefault(key, deque())
             while hits and now - hits[0] > self.window:
                 hits.popleft()
-            if len(hits) >= self.limit:
+            if len(hits) + max(cost, 1) > self.limit:
                 return False
-            hits.append(now)
+            hits.extend([now] * max(cost, 1))
             return True
 
     def is_blocked(self, key: str) -> bool:

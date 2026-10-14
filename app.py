@@ -150,7 +150,9 @@ def _upload_guard():
     """Limit uploads per visitor and stop accepting files when storage is full."""
     if request.endpoint not in _UPLOAD_ENDPOINTS:
         return None
-    if not app.config['UPLOAD_LIMITER'].allow(request.remote_addr or 'unknown'):
+    # Each file counts, so a 50-file Library batch costs 50, not 1
+    cost = sum(1 for f in request.files.getlist('files') if f.filename) or 1
+    if not app.config['UPLOAD_LIMITER'].allow(request.remote_addr or 'unknown', cost):
         return jsonify({'error': 'Too many uploads. Please wait a few minutes and try again.'}), 429
     limit_mb = app.config['MAX_UPLOAD_STORAGE_MB']
     if limit_mb > 0 and folder_size(UPLOAD_FOLDER) > limit_mb * 1024 * 1024:

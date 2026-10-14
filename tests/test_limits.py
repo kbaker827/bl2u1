@@ -28,6 +28,29 @@ def test_rate_limiter_window(monkeypatch):
     assert limiter._hits == {}
 
 
+def test_rate_limiter_charges_cost():
+    limiter = RateLimiter(5)
+    assert limiter.allow('a', 3)
+    assert not limiter.allow('a', 3)   # would exceed: nothing recorded
+    assert limiter.allow('a', 2)
+    assert not limiter.allow('a')
+
+
+def test_library_batch_counts_every_file(client, flask_app, monkeypatch):
+    monkeypatch.setitem(flask_app.config, 'UPLOAD_LIMITER', RateLimiter(3))
+    files = [(io.BytesIO(build_3mf(slice_info=plate([1]))), f'{i}.3mf') for i in range(4)]
+
+    res = client.post('/api/inventory/upload', data={'files': files},
+                      content_type='multipart/form-data')
+    assert res.status_code == 429
+
+    two = [(io.BytesIO(build_3mf(slice_info=plate([1]))), f'{i}.3mf') for i in range(2)]
+    assert client.post('/api/inventory/upload', data={'files': two},
+                       content_type='multipart/form-data').status_code == 200
+    assert _upload(client).status_code == 200      # 3rd of 3
+    assert _upload(client).status_code == 429
+
+
 def test_rate_limiter_disabled():
     limiter = RateLimiter(0)
     assert all(limiter.allow('a') for _ in range(100))
